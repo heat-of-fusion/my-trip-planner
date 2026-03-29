@@ -35,11 +35,15 @@ function calculateWeightedCentroid(clusterPoints) {
   };
 }
 
-export function runWeightedKMeans(places) {
-  if (!places || places.length === 0) return [];
+export function runWeightedKMeans(places, kInput) {
+  if (!places || places.length === 0) return { clusters: [], inertia: 0 };
 
-  let k = Math.min(5, Math.max(1, Math.floor(places.length / 4)));
-  if (places.length <= 2) k = 1;
+  // k값이 주어지지 않으면 기존의 자동 계산 로직 사용
+  let k = kInput || Math.min(5, Math.max(1, Math.floor(places.length / 4)));
+  if (places.length <= 2 && !kInput) k = 1;
+  
+  // k는 장소 개수보다 많을 수 없음
+  k = Math.min(k, places.length);
 
   let centroids = [];
   const shuffled = [...places].sort(() => 0.5 - Math.random());
@@ -48,7 +52,7 @@ export function runWeightedKMeans(places) {
   }
 
   let clusters = [];
-  const MAX_ITERATIONS = 20;
+  const MAX_ITERATIONS = 15; // 연산 속도를 위해 약간 조정
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       clusters = centroids.map(c => ({ centroid: c, points: [] }));
@@ -83,9 +87,45 @@ export function runWeightedKMeans(places) {
       if (!changed) break;
   }
 
-  return clusters.map((c, idx) => ({
-      id: `cluster-${idx}`,
-      centroid: centroids[idx],
-      points: c.points
-  }));
+  // 최종 Inertia 계산 (각 포인트와 중심점 사이의 거리 제곱 합)
+  let totalInertia = 0;
+  clusters.forEach(c => {
+    c.points.forEach(p => {
+      const d = getDistanceFromLatLonInKm(p.lat, p.lng, c.centroid.lat, c.centroid.lng);
+      totalInertia += d * d; 
+    });
+  });
+
+  // 시각적 오프셋 적용: 중심점이 장소를 가리지 않도록 살짝 이동
+  return {
+    clusters: clusters.map((c, idx) => {
+      let finalCentroid = { ...c.centroid };
+      
+      // 장소가 1개이거나, 중심점이 어떤 장소와 너무 가까우면 살짝 북동쪽으로 오프셋 (약 200~300m 수준)
+      const OFFSET_VAL = 0.0025; 
+      let needOffset = c.points.length === 1;
+      
+      if (!needOffset) {
+        for (const p of c.points) {
+          const dist = getDistanceFromLatLonInKm(p.lat, p.lng, finalCentroid.lat, finalCentroid.lng);
+          if (dist < 0.1) { // 100m 이내로 너무 가까우면
+            needOffset = true;
+            break;
+          }
+        }
+      }
+
+      if (needOffset) {
+        finalCentroid.lat += OFFSET_VAL;
+        finalCentroid.lng += OFFSET_VAL;
+      }
+
+      return {
+        id: `cluster-${idx}`,
+        centroid: finalCentroid,
+        points: c.points
+      };
+    }),
+    inertia: totalInertia
+  };
 }

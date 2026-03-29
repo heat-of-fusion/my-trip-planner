@@ -44,16 +44,35 @@ export const GeminiAPI = {
     return results;
   },
 
-  async streamChat(history, config, onToken) {
+  async streamChat(history, config, onToken, context = {}) {
     if (!config.apiKey) {
       throw new Error("API 키가 설정되지 않았습니다. 설정 버튼을 눌러 입력해주세요.");
     }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:streamGenerateContent?alt=sse&key=${config.apiKey}`;
     
+    const dynamicPrompt = `당신은 세계 최고의 AI 여행 플래너입니다. 
+사용자의 질문에 대해 먼저 친절하고 상세하게 한국어로 답변하세요. (예: "네, 도호쿠 지역의 온천 여행을 추천해 드릴게요. 다음과 같은 장소들이 유명합니다...") 
+답변의 마지막 부분에만 사용자가 지도에서 바로 확인할 수 있도록 추천 장소 리스트를 <takeaway> 태그를 사용하여 JSON 배열로 포함하세요. 
+JSON 예시: <takeaway>[{"id":"tokyo_01", "name":"도쿄 타워", "lat":35.6586, "lng":139.7454, "category":"관광", "description":"도쿄의 상징"}]</takeaway>
+
+사용자가 현재 확정한 장소 목록: ${context.confirmed || "없음"}
+사용자가 명시적으로 거부(비호감)한 장소 목록: ${context.rejected || "없음"}
+[매우 중요] 거부된 장소는 사용자가 명확히 선호하지 않음을 의미하므로 절대 다시 추천하지 말고, 거부된 장소들과 성격이 유사한 장소도 가급적 제외하세요.`;
+
+    // API에서 허용하지 않는 필드(debugInfo 등)를 제거하고 role과 parts만 남김
+    const sanitizedHistory = history.map(msg => ({
+      role: msg.role === 'model' ? 'model' : 'user',
+      parts: msg.parts
+    }));
+
     const body = {
-      systemInstruction: { parts: [{ text: this.getSystemPrompt() }] },
-      contents: history,
+      system_instruction: {
+        parts: [
+          { text: dynamicPrompt }
+        ]
+      },
+      contents: sanitizedHistory,
       generationConfig: {
         temperature: 0.7,
         maxOutputTokens: 8192
@@ -81,6 +100,7 @@ export const GeminiAPI = {
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
     let fullResponseText = "";
+    let fullResponseParts = [];
 
     while (true) {
       const { done, value } = await reader.read();
@@ -97,13 +117,17 @@ export const GeminiAPI = {
             if (jsonStr === "[DONE]") break;
 
             const data = JSON.parse(jsonStr);
-            const content = data.candidates?.[0]?.content?.parts;
-            if (content && content.length > 0) {
-              const chunkText = content[0].text;
-              if (chunkText) {
-                fullResponseText += chunkText;
-                onToken(chunkText);
-              }
+            const parts = data.candidates?.[0]?.content?.parts;
+            if (parts && parts.length > 0) {
+              // 전체 파츠를 추적 (텍스트, 도구 호출 등 포함)
+              parts.forEach(part => {
+                if (part.text) {
+                  fullResponseText += part.text;
+                  onToken(part.text);
+                }
+                // 메타데이터가 포함된 part 자체를 저장
+                fullResponseParts.push(part);
+              });
             }
           } catch(e) {
             
@@ -112,6 +136,10 @@ export const GeminiAPI = {
       }
     }
     
-    return fullResponseText;
+    return { 
+      text: fullResponseText, 
+      parts: fullResponseParts, 
+      sentPrompt: dynamicPrompt 
+    };
   }
 };

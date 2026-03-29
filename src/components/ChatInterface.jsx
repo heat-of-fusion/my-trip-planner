@@ -8,7 +8,10 @@ export default function ChatInterface({
   setChatHistory, 
   settings, 
   onAiSuggestions,
-  onNewMessage
+  onNewMessage,
+  confirmedPlaces,
+  rejectedPlaces,
+  setSelectedDebug
 }) {
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
@@ -42,22 +45,36 @@ export default function ChatInterface({
     setTempSystemMsg('');
 
     try {
-      const fullResponse = await GeminiAPI.streamChat(
+      const responseObj = await GeminiAPI.streamChat(
         newHistory,
         settings,
         (chunk) => {
           setTempSystemMsg((prev) => prev + chunk);
+        },
+        {
+          confirmed: confirmedPlaces.map(p => p.name).join(', '),
+          rejected: rejectedPlaces.map(p => p.name).join(', ')
         }
       );
 
-      const jsonPlaces = GeminiAPI.extractJSON(fullResponse);
+      const fullText = responseObj.text;
+      const fullParts = responseObj.parts;
+
+      const jsonPlaces = GeminiAPI.extractJSON(fullText);
       if (jsonPlaces.length > 0) {
         onAiSuggestions(jsonPlaces);
       }
 
       setChatHistory([
         ...newHistory,
-        { role: 'model', parts: [{ text: fullResponse }] }
+        { 
+          role: 'model', 
+          parts: fullParts,
+          debugInfo: { 
+            sentPrompt: responseObj.sentPrompt,
+            parts: fullParts 
+          }
+        }
       ]);
       setTempSystemMsg('');
     } catch (err) {
@@ -89,11 +106,23 @@ export default function ChatInterface({
         )}
         
         {chatHistory.map((msg, idx) => {
-          const content = hideTakeaways(msg.parts[0].text) || '(추천 장소를 추출했습니다)';
+          const rawText = msg.parts ? msg.parts.map(p => p.text).join('') : '';
+          const cleanContent = hideTakeaways(rawText);
+          const finalDisplay = cleanContent || '(추천 리스트를 업데이트했습니다)';
+
           return (
             <div key={idx} className={`message ${msg.role === 'user' ? 'user-msg' : 'system-msg'}`}>
               <div className="msg-content">
-                <ReactMarkdown>{content}</ReactMarkdown>
+                <ReactMarkdown>{finalDisplay}</ReactMarkdown>
+                {msg.debugInfo && (
+                  <button 
+                    className="debug-trigger" 
+                    title="프롬프트 디버그 정보 보기"
+                    onClick={() => setSelectedDebug(msg.debugInfo)}
+                  >
+                    🔍
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -135,7 +164,7 @@ export default function ChatInterface({
           overflow-y: auto;
           display: flex;
           flex-direction: column;
-          gap: 10px;
+          gap: 15px;
           margin-bottom: 15px;
           padding-right: 5px;
         }
@@ -144,21 +173,46 @@ export default function ChatInterface({
           font-size: 0.9rem;
           line-height: 1.5;
           word-break: break-word;
+          position: relative;
+        }
+        .msg-content {
+          position: relative;
+        }
+        .debug-trigger {
+          position: absolute;
+          top: 4px;
+          right: 4px;
+          background: rgba(0, 0, 0, 0.4);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 4px;
+          font-size: 0.65rem;
+          padding: 2px 4px;
+          cursor: pointer;
+          opacity: 0;
+          transition: opacity 0.2s ease;
+          color: white;
+        }
+        .message:hover .debug-trigger {
+          opacity: 1;
         }
         .system-msg .msg-content {
-          background: rgba(255, 255, 255, 0.05);
+          background: var(--glass-bg);
+          backdrop-filter: var(--glass-backdrop);
           border: 1px solid var(--glass-border);
-          padding: 12px 16px;
-          border-radius: 12px 12px 12px 0;
+          padding: 14px 18px;
+          border-radius: 14px 14px 14px 0;
+          box-shadow: var(--glass-shadow);
         }
         .user-msg {
           align-self: flex-end;
         }
         .user-msg .msg-content {
-          background: linear-gradient(135deg, rgba(0, 240, 255, 0.2), rgba(189, 0, 255, 0.2));
+          background: linear-gradient(135deg, rgba(0, 240, 255, 0.1), rgba(189, 0, 255, 0.1));
+          backdrop-filter: var(--glass-backdrop);
           border: 1px solid rgba(0, 240, 255, 0.3);
-          padding: 12px 16px;
-          border-radius: 12px 12px 0 12px;
+          padding: 14px 18px;
+          border-radius: 14px 14px 0 14px;
+          box-shadow: var(--glass-shadow);
         }
         .msg-content p {
           margin-bottom: 8px;
